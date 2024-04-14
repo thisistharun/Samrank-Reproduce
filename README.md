@@ -1,5 +1,5 @@
-# SAMRank
-This code is for paper "[SAMRank: Unsupervised Keyphrase Extraction using Self-Attention Map in BERT and GPT-2](https://aclanthology.org/2023.emnlp-main.630)" 
+# SamRank Reproduce
+We are reproducing the paper "[SAMRank: Unsupervised Keyphrase Extraction using Self-Attention Map in BERT and GPT-2](https://aclanthology.org/2023.emnlp-main.630)" 
 
 
 ## Requirements
