@@ -3,13 +3,13 @@ We are reproducing the paper "[SAMRank: Unsupervised Keyphrase Extraction using 
 
 
 ## Requirements
-- [stanford-corenlp-full-2018-02-27](https://drive.google.com/file/d/1K4Ll54ypTf_tF83Mkkar2QKOcZ4Uskl5/view?usp=sharing)  (please download the .zip file and extract it)
+- [stanford-corenlp-full-2018-02-27](https://drive.google.com/file/d/1K4Ll54ypTf_tF83Mkkar2QKOcZ4Uskl5/view?usp=sharing) Download the zip file and extract it
 
 Run 'stanford-corenlp-full-2018-02-27' on your computer's terminal using the following command:
 
     (1) cd stanford-corenlp-full-2018-02-27/
     
-    (2) java -mx4g -cp "*" edu.stanford.nlp.pipeline.StanfordCoreNLPServer -preload tokenize,ssplit,pos -status_port 9000 -port 9000 -timeout 15000 &
+    (2) java -mx4g -cp "*" edu.stanford.nlp.pipeline.StanfordCoreNLPServer -preload tokenize,ssplit,pos -status_port 9000 -port 9000 -timeout 15000
     
 - transformers
 - pytorch
