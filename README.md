@@ -1,5 +1,5 @@
 # SamRank Reproduce
-We are reproducing the paper "[SAMRank: Unsupervised Keyphrase Extraction using Self-Attention Map in BERT and GPT-2](https://aclanthology.org/2023.emnlp-main.630)" 
+To reproducing the paper "[SAMRank: Unsupervised Keyphrase Extraction using Self-Attention Map in BERT and GPT-2](https://aclanthology.org/2023.emnlp-main.630)" 
 
 
 ## Requirements
@@ -8,11 +8,12 @@ We are reproducing the paper "[SAMRank: Unsupervised Keyphrase Extraction using 
   ```shell
   java -mx4g -cp "*" edu.stanford.nlp.pipeline.StanfordCoreNLPServer -preload tokenize,ssplit,pos -status_port 9000 -port 9000 -timeout 15000
   
-- Download all the dependencies using the following command
+- Download the dependencies using the following command
   ```shell
   pip install -r requirements.txt
 
-## Runing
+## Running the Code.
+- Run the datasets {Inspec/SemEval2010/SemEval2017] using [BERT/GPT2]
 ```shell
 python samrank.py --dataset Inspec --plm BERT
 ```
@@ -31,5 +32,5 @@ python samrank.py --dataset SemEval2017 --plm BERT
 ```shell
 python samrank.py --dataset SemEval2017 --plm GPT2
 ```
-
-**The performances of all 144 heads** will be saved as data frames (.csv) in the 'experiment_results' folder.
+## Results
+- The results can be observed in .csv files in the folder 'experiment_results'
