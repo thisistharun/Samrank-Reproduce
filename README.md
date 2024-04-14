@@ -14,6 +14,22 @@ We are reproducing the paper "[SAMRank: Unsupervised Keyphrase Extraction using 
 
 ## Runing
 ```shell
-python samrank.py --dataset [Inspec/SemEval2010/SemEval2017] --plm [BERT/GPT2]
+python samrank.py --dataset Inspec --plm BERT
 ```
+```shell
+python samrank.py --dataset Inspec --plm GPT2
+```
+```shell
+python samrank.py --dataset SemEval2010 --plm BERT
+```
+```shell
+python samrank.py --dataset SemEval2010 --plm GPT2
+```
+```shell
+python samrank.py --dataset SemEval2017 --plm BERT
+```
+```shell
+python samrank.py --dataset SemEval2017 --plm GPT2
+```
+
 **The performances of all 144 heads** will be saved as data frames (.csv) in the 'experiment_results' folder.
