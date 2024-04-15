@@ -27,5 +27,5 @@ python samrank.py --dataset [Inspec/SemEval2010/SemEval2017] --plm [BERT/GPT2] -
 
 ```
 ## Results
-- The results can be observed in .csv files in the folder 'experiment_results'
+- The results can be observed in .csv files in the folder 'experiment_results'.
 - Also Top 3 Heads for f1@5, f1@10 and f1@15 are displayed on terminal after execution.
