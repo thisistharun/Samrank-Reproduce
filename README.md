@@ -13,24 +13,19 @@ To reproduce the paper "[SAMRank: Unsupervised Keyphrase Extraction using Self-A
   pip install -r requirements.txt
 
 ## Running the Code.
-- Run the datasets {Inspec/SemEval2010/SemEval2017] using [BERT/GPT2]
+- For running in Both Global and Propotional Modes
+- Select any one of the dataset from [Inspec/SemEval2010/SemEval2017] and one model from [BERT/GPT2] to get the results in both modes
+- Repeat for other datasets to evaluate the model
 ```shell
-python samrank.py --dataset Inspec --plm BERT
+python samrank.py --dataset [Inspec/SemEval2010/SemEval2017] --plm [BERT/GPT2]
 ```
+- For running in Individual Modes
+- Select any one of the dataset from [Inspec/SemEval2010/SemEval2017] and one model from [BERT/GPT2] along with any of the mode [Global/Propotional]
+- Repeat for other datasets to evaluate the model
 ```shell
-python samrank.py --dataset Inspec --plm GPT2
-```
-```shell
-python samrank.py --dataset SemEval2010 --plm BERT
-```
-```shell
-python samrank.py --dataset SemEval2010 --plm GPT2
-```
-```shell
-python samrank.py --dataset SemEval2017 --plm BERT
-```
-```shell
-python samrank.py --dataset SemEval2017 --plm GPT2
+python samrank.py --dataset [Inspec/SemEval2010/SemEval2017] --plm [BERT/GPT2] --mode [Global/Propotional]
+
 ```
 ## Results
 - The results can be observed in .csv files in the folder 'experiment_results'
+- Also Top 3 Heads for f1@5, f1@10 and f1@15 are displayed on terminal after execution.
