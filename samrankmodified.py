@@ -7,10 +7,14 @@ from collections import defaultdict
 import pandas as pd
 import numpy as np
 from nltk.stem import PorterStemmer
-
 import torch
+torch.cuda.empty_cache()
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
 
 from transformers import RobertaTokenizer, RobertaModel, XLNetTokenizer, XLNetModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 
 from swisscom_ai.research_keyphrase.preprocessing.postagging import PosTaggingCoreNLP
 from swisscom_ai.research_keyphrase.model.input_representation import InputTextObj
@@ -235,32 +239,38 @@ def evaluate_all_heads(layer_head_predicted_top15, dataset):
     return top3_f1_5, top3_f1_10, top3_f1_15
 
 
+
 def rank_short_documents(args, dataset, model, tokenizer):
+    # Handling different PLMs tokenization prefixes
     if args.plm == 'ROBERTA':
         prefix = '##'
     elif args.plm == 'XLNET':
         prefix = 'Ġ'
+    elif args.plm == 'MISTRAL':
+        prefix = 'Ġ'  # Adjust if MISTRAL uses a different prefix
 
     layer_head_predicted_top15 = defaultdict(list)
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device: {device}")
 
     model.to(device)
     model.eval()
 
+    torch.cuda.empty_cache()
+
     for data in tqdm(dataset):
         with torch.no_grad():
             tokenized_text = tokenizer(data['text'], return_tensors='pt')
             outputs = model(**tokenized_text.to(device))
 
-            attentions = outputs.attentions
+            # Handling models that output attentions differently
+            if args.plm in ['ROBERTA', 'XLNET', 'MISTRAL']:
+                attentions = outputs.attentions
 
             candidates = get_candidates(pos_tagger, data['text'])
             candidates = [phrase for phrase in candidates if phrase.split(' ')[0] not in stopwords]
-
             text_tokens = tokenizer.convert_ids_to_tokens(tokenized_text['input_ids'].squeeze(0))
-
+            
             candidates_indices = {}
             for phrase in candidates:
                 matched_indices = get_phrase_indices(text_tokens, phrase, prefix)
@@ -270,23 +280,22 @@ def rank_short_documents(args, dataset, model, tokenizer):
 
             candidates_indices = remove_repeated_sub_word(candidates_indices)
 
-            for layer in range(12):
-                for head in range(12):
+            # Calculate scores based on model specific configurations
+            for layer in range(12):  # Adjust number of layers if necessary
+                for head in range(12):  # Adjust number of heads if necessary
                     n_layer_attentions = attentions[layer].squeeze(0)
                     attention_map = n_layer_attentions[head]
-
                     global_attention_scores = get_col_sum_token_level(attention_map)
 
-                    if args.plm == "ROBERTA":
+                    # Nullifying unwanted attention in tokens based on the model
+                    if args.plm == "ROBERTA" or args.plm == "MISTRAL":
                         global_attention_scores[-1] = 0
                     elif args.plm == "XLNET":
                         global_attention_scores[0] = 0
 
-                    redistributed_attention_map = redistribute_global_attention_score(attention_map,
-                                                                                      global_attention_scores)
-
+                    redistributed_attention_map = redistribute_global_attention_score(
+                        attention_map, global_attention_scores)
                     redistributed_attention_map = normalize_attention_map(redistributed_attention_map)
-
                     proportional_attention_scores = get_row_sum_token_level(redistributed_attention_map)
 
                     if args.mode == 'Both':
@@ -306,9 +315,8 @@ def rank_short_documents(args, dataset, model, tokenizer):
                             continue
 
                         final_phrase_score = aggregate_phrase_scores(phrase_indices, final_tokens_score)
-
                         if len(phrase.split()) == 1:
-                            final_phrase_score = final_phrase_score / len(phrase_indices)
+                            final_phrase_score /= len(phrase_indices)
                         phrase_score_dict[phrase] = final_phrase_score
 
                     sorted_scores = sorted(phrase_score_dict.items(), key=lambda item: item[1], reverse=True)
@@ -324,7 +332,6 @@ def rank_short_documents(args, dataset, model, tokenizer):
                     layer_head_predicted_top15[(layer, head)].append(pred_stemmed_phrases)
 
     top3_f1_5, top3_f1_10, top3_f1_15 = evaluate_all_heads(layer_head_predicted_top15, dataset)
-
     print("top@5_f1  Top3 heads:")
     print(top3_f1_5[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
     print("top@10_f1  Top3 heads:")
@@ -333,16 +340,20 @@ def rank_short_documents(args, dataset, model, tokenizer):
     print(top3_f1_15[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
 
 
+
 def rank_long_documents(args, dataset, model, tokenizer):
+    # Setting tokenization prefixes and max document lengths for each PLM
     if args.plm == 'ROBERTA':
         prefix = '##'
         max_len = 512
     elif args.plm == 'XLNET':
         prefix = 'Ġ'
         max_len = 1024
+    elif args.plm == 'MISTRAL':
+        prefix = 'Ġ'  # Assuming it uses the same subword token prefix as GPT
+        max_len = 1024  # Adjust if MISTRAL has different handling for document length
 
     layer_head_predicted_top15 = defaultdict(list)
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device: {device}")
 
@@ -352,31 +363,29 @@ def rank_long_documents(args, dataset, model, tokenizer):
     for data in tqdm(dataset):
         with torch.no_grad():
             tokenized_text = tokenizer(data['text'], return_tensors='pt')
-
             candidates = get_candidates(pos_tagger, data['text'])
             candidates = [phrase for phrase in candidates if phrase.split(' ')[0] not in stopwords]
 
             total_tokens_ids = tokenized_text['input_ids'].squeeze(0).tolist()
-            if args.plm == 'ROBERTA':
-                total_tokens_ids = total_tokens_ids[1:-1]
-                max_len = 512
+            if args.plm != 'MISTRAL':
+                # Adjust tokens for ROBERTA and XLNET
+                total_tokens_ids = total_tokens_ids[1:-1] if args.plm == 'ROBERTA' else total_tokens_ids
 
             windows, attention_masks = get_same_len_segments(total_tokens_ids, max_len)
 
             layer_head_scores = defaultdict(lambda: defaultdict(float))
 
             for i in range(len(windows)):
-
                 window = windows[i]
                 attention_mask = attention_masks[i]
 
-                if args.plm == 'ROBERTA':
-                    window = [101] + window + [102]
+                if args.plm != 'MISTRAL':
+                    # Adding special tokens for ROBERTA and XLNET
+                    window = [101] + window + [102] if args.plm == 'ROBERTA' else window
                     attention_mask = [1] + attention_mask + [1]
 
                 window = torch.tensor([window])
                 attention_mask = torch.tensor([attention_mask])
-                # print(window.shape)
 
                 outputs = model(window.to(device), attention_mask=attention_mask.to(device))
                 attentions = outputs.attentions
@@ -392,31 +401,23 @@ def rank_long_documents(args, dataset, model, tokenizer):
 
                 candidates_indices = remove_repeated_sub_word(candidates_indices)
 
-                for layer in range(12):
+                for layer in range(12):  # Adjust the range if MISTRAL has different layers/heads
                     for head in range(12):
                         n_layer_attentions = attentions[layer].squeeze(0)
                         attention_map = n_layer_attentions[head]
 
                         global_attention_scores = get_col_sum_token_level(attention_map)
-
-                        if args.plm == "ROBERTA":
+                        if args.plm in ['ROBERTA', 'MISTRAL']:
                             global_attention_scores[-1] = 0
-                        elif args.plm == "XLNET":
+                        elif args.plm == 'XLNET':
                             global_attention_scores[0] = 0
 
-                        redistributed_attention_map = redistribute_global_attention_score(attention_map,
-                                                                                          global_attention_scores)
-
+                        redistributed_attention_map = redistribute_global_attention_score(
+                            attention_map, global_attention_scores)
                         redistributed_attention_map = normalize_attention_map(redistributed_attention_map)
-
                         proportional_attention_scores = get_row_sum_token_level(redistributed_attention_map)
 
-                        if args.mode == 'Both':
-                            final_tokens_score = global_attention_scores + proportional_attention_scores
-                        elif args.mode == 'Global':
-                            final_tokens_score = global_attention_scores
-                        elif args.mode == 'Proportional':
-                            final_tokens_score = proportional_attention_scores
+                        final_tokens_score = calculate_final_score(args, global_attention_scores, proportional_attention_scores)
 
                         for phrase in candidates_indices.keys():
                             try:
@@ -427,30 +428,38 @@ def rank_long_documents(args, dataset, model, tokenizer):
                                 continue
 
                             final_phrase_score = aggregate_phrase_scores(phrase_indices, final_tokens_score)
-
                             if len(phrase.split()) == 1:
-                                final_phrase_score = final_phrase_score / len(phrase_indices)
-
+                                final_phrase_score /= len(phrase_indices)
                             layer_head_scores[(layer, head)][phrase] += final_phrase_score
 
-            for layer in range(12):
-                for head in range(12):
-                    scores = layer_head_scores[(layer, head)]
+            final_scores(layer_head_scores, layer_head_predicted_top15)
 
-                    sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-                    stemmed_scores = [(" ".join(stemmer.stem(word) for word in keyword.split()), score) for
-                                      keyword, score in sorted_scores]
+    display_top_f1_scores(layer_head_predicted_top15, dataset)
 
-                    set_stemmed_scores_list = []
-                    for phrase, score in stemmed_scores:
-                        if phrase not in set_stemmed_scores_list:
-                            set_stemmed_scores_list.append(phrase)
+def calculate_final_score(args, global_scores, proportional_scores):
+    if args.mode == 'Both':
+        return global_scores + proportional_scores
+    elif args.mode == 'Global':
+        return global_scores
+    elif args.mode == 'Proportional':
+        return proportional_scores
 
-                    pred_stemmed_phrases = set_stemmed_scores_list[:15]
-                    layer_head_predicted_top15[(layer, head)].append(pred_stemmed_phrases)
+def final_scores(layer_head_scores, layer_head_predicted_top15):
+    for layer in range(12):
+        for head in range(12):
+            scores = layer_head_scores[(layer, head)]
+            sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+            stemmed_scores = [(" ".join(stemmer.stem(word) for word in keyword.split()), score) for
+                              keyword, score in sorted_scores]
+            set_stemmed_scores_list = []
+            for phrase, score in stemmed_scores:
+                if phrase not in set_stemmed_scores_list:
+                    set_stemmed_scores_list.append(phrase)
+            pred_stemmed_phrases = set_stemmed_scores_list[:15]
+            layer_head_predicted_top15[(layer, head)].append(pred_stemmed_phrases)
 
+def display_top_f1_scores(layer_head_predicted_top15, dataset):
     top3_f1_5, top3_f1_10, top3_f1_15 = evaluate_all_heads(layer_head_predicted_top15, dataset)
-
     print("top@5_f1  Top3 heads:")
     print(top3_f1_5[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
     print("top@10_f1  Top3 heads:")
@@ -506,7 +515,9 @@ if __name__ == '__main__':
     elif args.plm == 'XLNET':
         tokenizer = XLNetTokenizer.from_pretrained('xlnet-base-cased')
         model = XLNetModel.from_pretrained('xlnet-base-cased', output_hidden_states=True, output_attentions=True)
-
+    elif args.plm == 'MISTRAL':
+        tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2")
+        model = AutoModelForCausalLM.from_pretrained("mistralai/Mistral-7B-Instruct-v0.2", output_attentions=True)
     if doc_type == 'short':
         rank_short_documents(args, dataset, model, tokenizer)
     elif doc_type == 'long':
