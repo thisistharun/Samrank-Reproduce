@@ -23,219 +23,147 @@ from swisscom_ai.research_keyphrase.model.extractor import extract_candidates
 # Run "stanford-corenlp-full-2018-02-27" with terminal before run this code.
 # java -mx4g -cp "*" edu.stanford.nlp.pipeline.StanfordCoreNLPServer -preload tokenize,ssplit,pos -status_port 9000 -port 9000 -timeout 15000 &
 
-logging.basicConfig(filename='error_log.log',  # Name of the log file
-                    filemode='a',  # 'a' to append to the file if it exists
-                    level=logging.INFO,  # Logging level
-                    format='%(asctime)s - %(levelname)s - %(message)s',  # Format of the log messages
-                    datefmt='%Y-%m-%d %H:%M:%S')  # Format of the timestamp
+logging.basicConfig(filename='error_log.log', filemode='a', level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
 
+# Initialize POS tagger
 host = 'localhost'
 port = 9000
 pos_tagger = PosTaggingCoreNLP(host, port)
 
-# load stopwords
-stopwords = []
-with open('UGIR_stopwords.txt', "r") as f:
-    for line in f:
-        if line:
-            stopwords.append(line.replace('\n', ''))
+# Load stopwords
+def load_stopwords(filepath):
+    with open(filepath, "r") as file:
+        return [line.strip() for line in file if line.strip()]
 
+stopwords = load_stopwords('UGIR_stopwords.txt')
+
+# Initialize stemmer
 stemmer = PorterStemmer()
-
-
-
-def get_col_sum_token_level(attention_map):
-    tokens_score = torch.sum(attention_map, dim=0)
-    return tokens_score
-
-
-def redistribute_global_attention_score(attention_map, tokens_score):
-    new_attention_map = attention_map * tokens_score.unsqueeze(0)
-    return new_attention_map
-
-
-def normalize_attention_map(attention_map):
-    attention_map_sum = attention_map.sum(dim=0, keepdim=True)
-    attention_map_sum += 1e-10
-    attention_map_normalized = attention_map / attention_map_sum
-    return attention_map_normalized
-
-
-def get_row_sum_token_level(attention_map):
-    tokens_score = torch.sum(attention_map, dim=1)
-    return tokens_score
-
-
-def aggregate_phrase_scores(index_list, tokens_scores):
-    total_score = 0.0
-
-    for p_index in index_list:
-        part_sum = tokens_scores[p_index[0]:p_index[1]].sum()
-        total_score += part_sum
-
-    return total_score
-
-
-def get_phrase_indices(text_tokens, phrase, prefix):
-    text_tokens = [t.replace(prefix, '') for t in text_tokens]
-
-    phrase = phrase.replace(' ', '')
-
-    matched_indices = []
-    matched_index = []
-    target = phrase
-    for i in range(len(text_tokens)):
-        cur_token = text_tokens[i]
-        sub_len = min(len(cur_token), len(phrase))
-        if cur_token[:sub_len].lower() == target[:sub_len]:
-            matched_index.append(i)
-            target = target[sub_len:]
-            if len(target) == 0:
-                matched_indices.append([matched_index[0], matched_index[-1] + 1])
-                target = phrase
-        else:
-            matched_index = []
-            target = phrase
-            if cur_token[:sub_len].lower() == target[:sub_len]:
-                matched_index.append(i)
-                target = target[sub_len:]
-                if len(target) == 0:
-                    matched_indices.append([matched_index[0], matched_index[-1] + 1])
-                    target = phrase
-
-    return matched_indices
-
-
-def remove_repeated_sub_word(candidates_pos_dict):
-    for phrase in candidates_pos_dict.keys():
-        split_phrase = phrase.split()
-        if len(split_phrase) > 1:
-            for word in split_phrase:
-                if word in candidates_pos_dict:
-                    single_word_positions = candidates_pos_dict[word]
-                    phrase_positions = candidates_pos_dict[phrase]
-                    single_word_alone_positions = [pos for pos in single_word_positions if not any(
-                        pos[0] >= phrase_pos[0] and pos[1] <= phrase_pos[1] for phrase_pos in phrase_positions)]
-                    candidates_pos_dict[word] = single_word_alone_positions
-
-    return candidates_pos_dict
-
-
-def get_same_len_segments(total_tokens_ids, max_len):
-    num_of_seg = (len(total_tokens_ids) // max_len) + 1
-    seg_len = int(len(total_tokens_ids) / num_of_seg)
-    segments = []
-    attn_masks = []
-    for _ in range(num_of_seg):
-        if len(total_tokens_ids) > seg_len:
-            segment = total_tokens_ids[:seg_len]
-            total_tokens_ids = total_tokens_ids[seg_len:]
-        else:
-            segment = total_tokens_ids
-        segments.append(segment)
-        attn_masks.append([1] * len(segments[-1]))
-
-    return segments, attn_masks
-
 
 def read_jsonl(path):
     data = []
     with open(path, 'r') as f:
         for line in f:
-            item = json.loads(line.strip())
-            data.append(item)
+            data.append(json.loads(line.strip()))
     return data
 
+# Define functions for processing attention maps
+def get_col_sum_token_level(attention_map):
+    return torch.sum(attention_map, dim=0)
 
+def redistribute_global_attention_score(attention_map, tokens_score):
+    return attention_map * tokens_score.unsqueeze(0)
+
+def normalize_attention_map(attention_map):
+    attention_map_sum = attention_map.sum(dim=0, keepdim=True) + 1e-10
+    return attention_map / attention_map_sum
+
+def get_row_sum_token_level(attention_map):
+    return torch.sum(attention_map, dim=1)
+
+# Define functions for processing phrases
+def aggregate_phrase_scores(index_list, tokens_scores):
+    return sum(tokens_scores[start:end].sum() for start, end in index_list)
+
+def get_phrase_indices(text_tokens, phrase, prefix):
+    clean_tokens = [token.replace(prefix, '') for token in text_tokens]
+    phrase = phrase.replace(' ', '')
+    matched_indices = []
+    target = phrase
+    i = 0
+    while i < len(clean_tokens):
+        if clean_tokens[i].startswith(target):
+            start = i
+            while i < len(clean_tokens) and target:
+                length = len(clean_tokens[i])
+                target = target[length:]
+                i += 1
+            matched_indices.append((start, i))
+            target = phrase
+        else:
+            i += 1
+    return matched_indices
+
+# Define functions for handling candidates
+def remove_repeated_sub_word(candidates_pos_dict):
+    """
+    Remove positions of single words if they are fully contained within any of the positions of longer phrases.
+    """
+    for phrase in list(candidates_pos_dict.keys()):
+        if ' ' in phrase:  # This ensures we're only checking multi-word phrases
+            phrase_positions = candidates_pos_dict[phrase]
+            for word in phrase.split():
+                if word in candidates_pos_dict:
+                    single_word_positions = candidates_pos_dict[word]
+                    # Filter positions where the single word is not fully contained within any multi-word phrase positions
+                    filtered_positions = [pos for pos in single_word_positions if not any(p_start <= pos[0] and p_end >= pos[1] for p_start, p_end in phrase_positions)]
+                    candidates_pos_dict[word] = filtered_positions
+
+    return candidates_pos_dict
+
+
+def get_same_len_segments(total_tokens_ids, max_len):
+    num_of_seg = (len(total_tokens_ids) + max_len - 1) // max_len
+    segments = [total_tokens_ids[i * max_len:(i + 1) * max_len] for i in range(num_of_seg)]
+    attn_masks = [[1] * len(segment) for segment in segments]
+    return segments, attn_masks
+
+# Define functions for evaluating keyphrase extraction
 def get_candidates(core_nlp, text):
-    tagged = core_nlp.pos_tag_raw_text(text)
-    text_obj = InputTextObj(tagged, 'fr')
-    candidates = extract_candidates(text_obj)
-    return candidates
-
+    tagged_text = core_nlp.pos_tag_raw_text(text)
+    text_obj = InputTextObj(tagged_text, 'en')
+    return extract_candidates(text_obj)
 
 def get_score_full(candidates, references, maxDepth=15):
-    precision = []
-    recall = []
     reference_set = set(references)
-    referencelen = len(reference_set)
     true_positive = 0
-    for i in range(maxDepth):
-        if len(candidates) > i:
-            kp_pred = candidates[i]
-            if kp_pred in reference_set:
-                true_positive += 1
-            precision.append(true_positive / float(i + 1))
-            recall.append(true_positive / float(referencelen))
-        else:
-            precision.append(true_positive / float(len(candidates)))
-            recall.append(true_positive / float(referencelen))
+    precision, recall = [], []
+    for i, candidate in enumerate(candidates):
+        if candidate in reference_set:
+            true_positive += 1
+        if i < maxDepth:
+            precision.append(true_positive / (i + 1))
+            recall.append(true_positive / len(reference_set))
     return precision, recall
-
 
 def evaluate(candidates, references):
     results = {}
-    all_error_instances = []
-    precision_scores, recall_scores, f1_scores = {5: [], 10: [], 15: []}, \
-                                                 {5: [], 10: [], 15: []}, \
-                                                 {5: [], 10: [], 15: []}
-    for idx, (candidate, reference) in enumerate(zip(candidates, references)):
-        error_details = log_error_instances(candidate, reference, idx)
-        all_error_instances.append(error_details)
+    precision_scores, recall_scores, f1_scores = defaultdict(list), defaultdict(list), defaultdict(list)
     for candidate, reference in zip(candidates, references):
         p, r = get_score_full(candidate, reference)
-        for i in [5, 10, 15]:
-            precision = p[i - 1]
-            recall = r[i - 1]
-            if precision + recall > 0:
-                f1_scores[i].append((2 * (precision * recall)) / (precision + recall))
-            else:
-                f1_scores[i].append(0)
-            precision_scores[i].append(precision)
-            recall_scores[i].append(recall)
+        for depth in [5, 10, 15]:
+            precision = p[depth - 1] if depth <= len(p) else p[-1]
+            recall = r[depth - 1] if depth <= len(r) else r[-1]
+            f1 = 2 * precision * recall / (precision + recall) if precision + recall > 0 else 0
+            precision_scores[depth].append(precision)
+            recall_scores[depth].append(recall)
+            f1_scores[depth].append(f1)
 
-    print("########################\nMetrics")
-    for i in precision_scores:
-        print("@{}".format(i))
-        print("F1:{}".format(np.mean(f1_scores[i])))
-        print("P:{}".format(np.mean(precision_scores[i])))
-        print("R:{}".format(np.mean(recall_scores[i])))
-
-        top_n_p = 'precision@' + str(i)
-        top_n_r = 'recall@' + str(i)
-        top_n_f1 = 'f1@' + str(i)
-        results[top_n_p] = np.mean(precision_scores[i])
-        results[top_n_r] = np.mean(recall_scores[i])
-        results[top_n_f1] = np.mean(f1_scores[i])
-    print("#########################")
-
-    # Example code to analyze specific error cases
-    for error_instance in all_error_instances:
-        if error_instance['false_negative']:
-            # Analyze the document text and the attention map for false negatives
-            pass
-        if error_instance['false_positive']:
-            # Analyze the document text and the attention map for false positives
-            pass
-
+    # Print results
+    print("Metrics")
+    for depth in [5, 10, 15]:
+        avg_precision = np.mean(precision_scores[depth])
+        avg_recall = np.mean(recall_scores[depth])
+        avg_f1 = np.mean(f1_scores[depth])
+        print(f"@{depth}: Precision={avg_precision:.2f}, Recall={avg_recall:.2f}, F1={avg_f1:.2f}")
+        results[f'precision@{depth}'] = avg_precision
+        results[f'recall@{depth}'] = avg_recall
+        results[f'f1@{depth}'] = avg_f1
 
     return results
 
+# Define error logging for evaluations
 def log_error_instances(candidate_set, reference_set, data_id):
     true_positive = set(candidate_set) & set(reference_set)
     false_positive = set(candidate_set) - set(reference_set)
     false_negative = set(reference_set) - set(candidate_set)
-
     error_details = {
         'data_id': data_id,
-        'candidate_set': candidate_set,
-        'reference_set': reference_set,
         'false_positive': list(false_positive),
         'false_negative': list(false_negative),
         'true_positive': list(true_positive)
     }
-    
-    # Here you can write these details to a log file or print them
     logging.info(f"Error details for data ID {data_id}: {error_details}")
     return error_details
 
@@ -243,99 +171,88 @@ def log_error_instances(candidate_set, reference_set, data_id):
 def evaluate_all_heads(layer_head_predicted_top15, dataset):
     experiment_results = []
 
+    # Iterate through each layer and head
     for (layer, head), predicted_phrases in layer_head_predicted_top15.items():
-        gold_keyphrase_list = []
-        predicted_keyphrase_list = []
+        # Prepare gold keyphrases and predicted keyphrases lists for evaluation
+        gold_keyphrase_list = [[key.lower() for key in item['keyphrases']] for item in dataset]
+        predicted_keyphrase_list = [[phrase.lower() for phrase in phrases] for phrases in predicted_phrases]
 
-        for i in range(len(dataset)):
-            predicted_keyphrase = predicted_phrases[i]
-            predicted_keyphrase = [phrase.lower() for phrase in predicted_keyphrase]
-            predicted_keyphrase_list.append(predicted_keyphrase)
-
-            gold_keyphrase = [key.lower() for key in dataset[i]['keyphrases']]
-            gold_keyphrase_list.append(gold_keyphrase)
-
-        print(f"{layer + 1}th layer {head + 1}th head result:")
+        # Log the current layer and head
+        print(f"Layer {layer + 1}, Head {head + 1} results:")
+        
+        # Evaluate the predicted keyphrases against the gold standard
         total_score = evaluate(predicted_keyphrase_list, gold_keyphrase_list)
-        total_score['layer'] = layer + 1
-        total_score['head'] = head + 1
+        total_score.update({'layer': layer + 1, 'head': head + 1})
+        
+        # Append the results for this layer and head
         experiment_results.append(total_score)
-        print()
 
+    # Convert results to a DataFrame for further processing
     df = pd.DataFrame(experiment_results)
 
-    path = f'experiment_results/{args.dataset}/'
-    os.makedirs(path, exist_ok=True)
-    df.to_csv(f'{path}{args.plm}_{args.mode}.csv', index=False)
+    # Define the path for saving results and ensure the directory exists
+    results_path = f'experiment_results/{args.dataset}/'
+    os.makedirs(results_path, exist_ok=True)
+    
+    # Save the DataFrame to CSV
+    df.to_csv(f'{results_path}{args.plm}_{args.mode}.csv', index=False)
 
+    # Extract the top 3 results based on F1 scores at different cut-offs
     top3_f1_5 = df.nlargest(3, 'f1@5').reset_index(drop=True)
     top3_f1_10 = df.nlargest(3, 'f1@10').reset_index(drop=True)
     top3_f1_15 = df.nlargest(3, 'f1@15').reset_index(drop=True)
 
+    # Return the top results
     return top3_f1_5, top3_f1_10, top3_f1_15
 
 
 def rank_short_documents(args, dataset, model, tokenizer):
-    if args.plm == 'BERT':
-        prefix = '##'
-    elif args.plm == 'mBERT':
-        prefix = '##'
-    elif args.plm == 'GPT2':
-        prefix = 'Ġ'
-    elif args.plm == "RoBERTa" or args.plm == "XLM-R":
-        prefix = 'Ġ'
+    # Define token prefixes for different models
+    prefixes = {
+        'BERT': '##',
+        'mBERT': '##',
+        'GPT2': 'Ġ',
+        'RoBERTa': 'Ġ',
+        'XLM-R': 'Ġ'
+    }
+    
+    prefix = prefixes.get(args.plm, '##')  # Default to '##' if model not in dictionary
 
     layer_head_predicted_top15 = defaultdict(list)
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"device: {device}")
-
     model.to(device)
     model.eval()
 
-    for data in tqdm(dataset):
+    for data in tqdm(dataset, desc="Processing documents"):
         with torch.no_grad():
             tokenized_text = tokenizer(data['text'], return_tensors='pt', max_length=512, truncation=True)
             outputs = model(**tokenized_text.to(device))
-
             attentions = outputs.attentions
 
             candidates = get_candidates(pos_tagger, data['text'])
             candidates = [phrase for phrase in candidates if phrase.split(' ')[0] not in stopwords]
 
             text_tokens = tokenizer.convert_ids_to_tokens(tokenized_text['input_ids'].squeeze(0))
-
-            candidates_indices = {}
-            for phrase in candidates:
-                matched_indices = get_phrase_indices(text_tokens, phrase, prefix)
-                if len(matched_indices) == 0:
-                    continue
-                candidates_indices[phrase] = matched_indices
+            candidates_indices = {
+                phrase: get_phrase_indices(text_tokens, phrase, prefix) 
+                for phrase in candidates 
+                if get_phrase_indices(text_tokens, phrase, prefix)
+            }
 
             candidates_indices = remove_repeated_sub_word(candidates_indices)
 
-            for layer in range(12):
-                for head in range(12):
-                    n_layer_attentions = attentions[layer].squeeze(0)
-                    attention_map = n_layer_attentions[head]
-
+            for layer in range(len(attentions)):
+                for head in range(attentions[layer].size(1)):
+                    attention_map = attentions[layer].squeeze(0)[head]
                     global_attention_scores = get_col_sum_token_level(attention_map)
 
-                    if args.plm == "BERT":
-                        global_attention_scores[-1] = 0
-                    if args.plm == "mBERT":
-                        global_attention_scores[-1] = 0
-                    elif args.plm == "GPT2":
-                        global_attention_scores[0] = 0
-                    elif args.plm == "RoBERTa" or args.plm == "XLM-R":
+                    # Adjust the first or last token's attention based on the model
+                    if args.plm in ["GPT2", "RoBERTa", "XLM-R"]:
                         global_attention_scores[0] = 0   # Zero out attention for the <s> token at the beginning
                         global_attention_scores[-1] = 0  # Zero out attention for the </s> token at the end
 
-                    redistributed_attention_map = redistribute_global_attention_score(attention_map,
-                                                                                      global_attention_scores)
-
+                    redistributed_attention_map = redistribute_global_attention_score(attention_map, global_attention_scores)
                     redistributed_attention_map = normalize_attention_map(redistributed_attention_map)
-
                     proportional_attention_scores = get_row_sum_token_level(redistributed_attention_map)
 
                     if args.mode == 'Both':
@@ -345,180 +262,111 @@ def rank_short_documents(args, dataset, model, tokenizer):
                     elif args.mode == 'Proportional':
                         final_tokens_score = proportional_attention_scores
 
-                    phrase_score_dict = {}
-                    for phrase in candidates_indices.keys():
-                        try:
-                            phrase_indices = candidates_indices[phrase]
-                            if len(phrase_indices) == 0:
-                                continue
-                        except KeyError:
-                            continue
-
-                        final_phrase_score = aggregate_phrase_scores(phrase_indices, final_tokens_score)
-
-                        if len(phrase.split()) == 1:
-                            final_phrase_score = final_phrase_score / len(phrase_indices)
-                        phrase_score_dict[phrase] = final_phrase_score
+                    phrase_score_dict = {
+                        phrase: aggregate_phrase_scores(indices, final_tokens_score) / (len(indices) if len(phrase.split()) == 1 else 1)
+                        for phrase, indices in candidates_indices.items() if indices
+                    }
 
                     sorted_scores = sorted(phrase_score_dict.items(), key=lambda item: item[1], reverse=True)
-                    stemmed_sorted_scores = [(" ".join(stemmer.stem(word) for word in phrase.split()), score) for
-                                             phrase, score in sorted_scores]
+                    stemmed_sorted_scores = [(" ".join(stemmer.stem(word) for word in phrase.split()), score) for phrase, score in sorted_scores]
 
-                    set_stemmed_scores_list = []
-                    for phrase, score in stemmed_sorted_scores:
-                        if phrase not in set_stemmed_scores_list:
-                            set_stemmed_scores_list.append(phrase)
-
+                    set_stemmed_scores_list = list(dict.fromkeys([phrase for phrase, _ in stemmed_sorted_scores]))
                     pred_stemmed_phrases = set_stemmed_scores_list[:15]
                     layer_head_predicted_top15[(layer, head)].append(pred_stemmed_phrases)
 
     top3_f1_5, top3_f1_10, top3_f1_15 = evaluate_all_heads(layer_head_predicted_top15, dataset)
 
-    print("top@5_f1  Top3 heads:")
+    # Output top results
+    print("Top@5 F1 - Top 3 heads:")
     print(top3_f1_5[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
-    print("top@10_f1  Top3 heads:")
+    print("Top@10 F1 - Top 3 heads:")
     print(top3_f1_10[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
     print("top@15_f1  Top3 heads:")
     print(top3_f1_15[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
 
 
 def rank_long_documents(args, dataset, model, tokenizer):
-    if args.plm == 'BERT':
-        prefix = '##'
-        max_len = 512
-    elif args.plm == 'mBERT':
-        prefix = '##'
-        max_len = 512
-    elif args.plm == 'GPT2':
-        prefix = 'Ġ'
-        max_len = 1024
-    elif args.plm == "RoBERTa":
-        prefix = 'Ġ'
-        max_len = 1024
+    # Define token prefixes and maximum lengths for different models
+    model_settings = {
+        'BERT': {'prefix': '##', 'max_len': 512},
+        'mBERT': {'prefix': '##', 'max_len': 512},
+        'GPT2': {'prefix': 'Ġ', 'max_len': 1024},
+        'RoBERTa': {'prefix': 'Ġ', 'max_len': 1024}
+    }
+
+    # Get model specific settings
+    prefix = model_settings.get(args.plm, {'prefix': '##', 'max_len': 512})
 
     layer_head_predicted_top15 = defaultdict(list)
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"device: {device}")
-
     model.to(device)
     model.eval()
 
-    for data in tqdm(dataset):
+    print(f"Using device: {device}")
+
+    for data in tqdm(dataset, desc="Processing long documents"):
         with torch.no_grad():
             tokenized_text = tokenizer(data['text'], return_tensors='pt')
-
-            candidates = get_candidates(pos_tagger, data['text'])
-            candidates = [phrase for phrase in candidates if phrase.split(' ')[0] not in stopwords]
-
+            candidates = [phrase for phrase in get_candidates(pos_tagger, data['text']) if phrase.split(' ')[0] not in stopwords]
             total_tokens_ids = tokenized_text['input_ids'].squeeze(0).tolist()
-            if args.plm == 'BERT':
-                total_tokens_ids = total_tokens_ids[1:-1]
-                max_len = 512
 
-            windows, attention_masks = get_same_len_segments(total_tokens_ids, max_len)
+            # Adjust token ids based on the model
+            if args.plm in ['BERT', 'mBERT']:
+                total_tokens_ids = total_tokens_ids[1:-1]  # Remove CLS and SEP tokens for BERT and mBERT
+
+            # Generate segments and attention masks
+            windows, attention_masks = get_same_len_segments(total_tokens_ids, prefix['max_len'])
 
             layer_head_scores = defaultdict(lambda: defaultdict(float))
 
-            for i in range(len(windows)):
+            for i, (window, attention_mask) in enumerate(zip(windows, attention_masks)):
+                # Prepare input tensors
+                window_tensor = torch.tensor([window]).to(device)
+                attention_mask_tensor = torch.tensor([attention_mask]).to(device)
 
-                window = windows[i]
-                attention_mask = attention_masks[i]
-
-                if args.plm == 'BERT' or args.plm == 'mBERT':
-                    window = [101] + window + [102]
-                    attention_mask = [1] + attention_mask + [1]
-
-                # Truncate the input sequences to fit within max_len
-                window = window[:max_len]
-                attention_mask = attention_mask[:max_len]
-
-                window = torch.tensor([window])
-                attention_mask = torch.tensor([attention_mask])
-                
-                outputs = model(window.to(device), attention_mask=attention_mask.to(device))
+                outputs = model(window_tensor, attention_mask=attention_mask_tensor)
                 attentions = outputs.attentions
 
-                text_tokens = tokenizer.convert_ids_to_tokens(window[0])
-
-                candidates_indices = {}
-                for phrase in candidates:
-                    matched_indices = get_phrase_indices(text_tokens, phrase, prefix)
-                    if len(matched_indices) == 0:
-                        continue
-                    candidates_indices[phrase] = matched_indices
-
+                text_tokens = tokenizer.convert_ids_to_tokens(window_tensor[0])
+                candidates_indices = {phrase: get_phrase_indices(text_tokens, phrase, prefix['prefix']) for phrase in candidates if get_phrase_indices(text_tokens, phrase, prefix['prefix'])}
                 candidates_indices = remove_repeated_sub_word(candidates_indices)
 
-                for layer in range(12):
-                    for head in range(12):
-                        n_layer_attentions = attentions[layer].squeeze(0)
-                        attention_map = n_layer_attentions[head]
-
+                # Process each layer and head
+                for layer in range(12):  # Assuming the model has 12 layers; adapt as necessary
+                    for head in range(12):  # Assuming each layer has 12 heads; adapt as necessary
+                        attention_map = attentions[layer][head].squeeze(0)
                         global_attention_scores = get_col_sum_token_level(attention_map)
+                        if args.plm in ["GPT2", "RoBERTa"]:  # Zero out attention for special tokens
+                            global_attention_scores[0], global_attention_scores[-1] = 0, 0
 
-                        if args.plm == "BERT":
-                            global_attention_scores[-1] = 0
-                        elif args.plm == "mBERT":
-                            global_attention_scores[-1] = 0
-                        elif args.plm == "GPT2":
-                            global_attention_scores[0] = 0
-                        elif args.plm == "RoBERTa":
-                            global_attention_scores[0] = 0   # Zero out attention for the <s> token at the beginning
-                            global_attention_scores[-1] = 0  # Zero out attention for the </s> token at the end
-                        redistributed_attention_map = redistribute_global_attention_score(attention_map,
-                                                                                          global_attention_scores)
-
-                        redistributed_attention_map = normalize_attention_map(redistributed_attention_map)
-
+                        # Normalize and redistribute attention
+                        redistributed_attention_map = normalize_attention_map(redistribute_global_attention_score(attention_map, global_attention_scores))
                         proportional_attention_scores = get_row_sum_token_level(redistributed_attention_map)
 
-                        if args.mode == 'Both':
-                            final_tokens_score = global_attention_scores + proportional_attention_scores
-                        elif args.mode == 'Global':
-                            final_tokens_score = global_attention_scores
-                        elif args.mode == 'Proportional':
-                            final_tokens_score = proportional_attention_scores
+                        # Calculate final token scores based on the specified mode
+                        final_tokens_score = {
+                            'Both': global_attention_scores + proportional_attention_scores,
+                            'Global': global_attention_scores,
+                            'Proportional': proportional_attention_scores
+                        }[args.mode]
 
-                        for phrase in candidates_indices.keys():
-                            try:
-                                phrase_indices = candidates_indices[phrase]
-                                if len(phrase_indices) == 0:
-                                    continue
-                            except KeyError:
-                                continue
-
-                            final_phrase_score = aggregate_phrase_scores(phrase_indices, final_tokens_score)
-
-                            if len(phrase.split()) == 1:
-                                final_phrase_score = final_phrase_score / len(phrase_indices)
-
+                        # Calculate scores for each phrase
+                        for phrase, indices in candidates_indices.items():
+                            final_phrase_score = aggregate_phrase_scores(indices, final_tokens_score) / (len(indices) if len(phrase.split()) == 1 else 1)
                             layer_head_scores[(layer, head)][phrase] += final_phrase_score
 
-            for layer in range(12):
-                for head in range(12):
-                    scores = layer_head_scores[(layer, head)]
-
-                    sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-                    stemmed_scores = [(" ".join(stemmer.stem(word) for word in keyword.split()), score) for
-                                      keyword, score in sorted_scores]
-
-                    set_stemmed_scores_list = []
-                    for phrase, score in stemmed_scores:
-                        if phrase not in set_stemmed_scores_list:
-                            set_stemmed_scores_list.append(phrase)
-
-                    pred_stemmed_phrases = set_stemmed_scores_list[:15]
-                    layer_head_predicted_top15[(layer, head)].append(pred_stemmed_phrases)
+            # Collate results for all heads
+            for (layer, head), scores in layer_head_scores.items():
+                sorted_scores = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+                stemmed_scores = [(" ".join(stemmer.stem(word) for word in phrase.split()), score) for phrase, score in sorted_scores]
+                unique_stemmed_scores = list(dict.fromkeys(stemmed_scores))
+                layer_head_predicted_top15[(layer, head)].append([phrase for phrase, _ in unique_stemmed_scores][:15])
 
     top3_f1_5, top3_f1_10, top3_f1_15 = evaluate_all_heads(layer_head_predicted_top15, dataset)
-
-    print("top@5_f1  Top3 heads:")
-    print(top3_f1_5[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
-    print("top@10_f1  Top3 heads:")
-    print(top3_f1_10[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
-    print("top@15_f1  Top3 heads:")
-    print(top3_f1_15[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
+    print("Top F1 scores for short documents:\n")
+    print("Top@5 F1 - Top 3 heads:\n", top3_f1_5[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
+    print("Top@10 F1 - Top 3 heads:\n", top3_f1_10[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
+    print("Top@15 F1 - Top 3 heads:\n", top3_f1_15[['f1@5', 'f1@10', 'f1@15', 'layer', 'head']].to_string(index=False))
 
 
 if __name__ == '__main__':
