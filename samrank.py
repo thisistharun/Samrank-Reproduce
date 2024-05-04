@@ -1,5 +1,6 @@
 import json
 import argparse
+import logging
 import os
 import sys
 from tqdm import tqdm
@@ -10,8 +11,9 @@ from nltk.stem import PorterStemmer
 
 import torch
 
-from transformers import AutoTokenizer, BertModel
+from transformers import AutoTokenizer, BertModel, AutoModel
 from transformers import GPT2Tokenizer, GPT2Model
+from transformers import RobertaTokenizer, RobertaModel
 
 from swisscom_ai.research_keyphrase.preprocessing.postagging import PosTaggingCoreNLP
 from swisscom_ai.research_keyphrase.model.input_representation import InputTextObj
@@ -20,6 +22,12 @@ from swisscom_ai.research_keyphrase.model.extractor import extract_candidates
 
 # Run "stanford-corenlp-full-2018-02-27" with terminal before run this code.
 # java -mx4g -cp "*" edu.stanford.nlp.pipeline.StanfordCoreNLPServer -preload tokenize,ssplit,pos -status_port 9000 -port 9000 -timeout 15000 &
+
+logging.basicConfig(filename='error_log.log',  # Name of the log file
+                    filemode='a',  # 'a' to append to the file if it exists
+                    level=logging.INFO,  # Logging level
+                    format='%(asctime)s - %(levelname)s - %(message)s',  # Format of the log messages
+                    datefmt='%Y-%m-%d %H:%M:%S')  # Format of the timestamp
 
 host = 'localhost'
 port = 9000
@@ -141,7 +149,7 @@ def read_jsonl(path):
 
 def get_candidates(core_nlp, text):
     tagged = core_nlp.pos_tag_raw_text(text)
-    text_obj = InputTextObj(tagged, 'en')
+    text_obj = InputTextObj(tagged, 'fr')
     candidates = extract_candidates(text_obj)
     return candidates
 
@@ -152,6 +160,10 @@ def get_score_full(candidates, references, maxDepth=15):
     reference_set = set(references)
     referencelen = len(reference_set)
     true_positive = 0
+
+    if len(candidates) == 0:  # Check if candidates list is empty
+        return [0] * maxDepth, [0] * maxDepth  # Return zero precision and recall
+
     for i in range(maxDepth):
         if len(candidates) > i:
             kp_pred = candidates[i]
@@ -167,9 +179,13 @@ def get_score_full(candidates, references, maxDepth=15):
 
 def evaluate(candidates, references):
     results = {}
+    all_error_instances = []
     precision_scores, recall_scores, f1_scores = {5: [], 10: [], 15: []}, \
                                                  {5: [], 10: [], 15: []}, \
                                                  {5: [], 10: [], 15: []}
+    for idx, (candidate, reference) in enumerate(zip(candidates, references)):
+        error_details = log_error_instances(candidate, reference, idx)
+        all_error_instances.append(error_details)
     for candidate, reference in zip(candidates, references):
         p, r = get_score_full(candidate, reference)
         for i in [5, 10, 15]:
@@ -197,7 +213,35 @@ def evaluate(candidates, references):
         results[top_n_f1] = np.mean(f1_scores[i])
     print("#########################")
 
+    # Example code to analyze specific error cases
+    for error_instance in all_error_instances:
+        if error_instance['false_negative']:
+            # Analyze the document text and the attention map for false negatives
+            pass
+        if error_instance['false_positive']:
+            # Analyze the document text and the attention map for false positives
+            pass
+
+
     return results
+
+def log_error_instances(candidate_set, reference_set, data_id):
+    true_positive = set(candidate_set) & set(reference_set)
+    false_positive = set(candidate_set) - set(reference_set)
+    false_negative = set(reference_set) - set(candidate_set)
+
+    error_details = {
+        'data_id': data_id,
+        'candidate_set': candidate_set,
+        'reference_set': reference_set,
+        'false_positive': list(false_positive),
+        'false_negative': list(false_negative),
+        'true_positive': list(true_positive)
+    }
+    
+    # Here you can write these details to a log file or print them
+    logging.info(f"Error details for data ID {data_id}: {error_details}")
+    return error_details
 
 
 def evaluate_all_heads(layer_head_predicted_top15, dataset):
@@ -238,7 +282,11 @@ def evaluate_all_heads(layer_head_predicted_top15, dataset):
 def rank_short_documents(args, dataset, model, tokenizer):
     if args.plm == 'BERT':
         prefix = '##'
+    elif args.plm == 'mBERT':
+        prefix = '##'
     elif args.plm == 'GPT2':
+        prefix = 'Ġ'
+    elif args.plm == "RoBERTa" or args.plm == "XLM-R":
         prefix = 'Ġ'
 
     layer_head_predicted_top15 = defaultdict(list)
@@ -251,7 +299,7 @@ def rank_short_documents(args, dataset, model, tokenizer):
 
     for data in tqdm(dataset):
         with torch.no_grad():
-            tokenized_text = tokenizer(data['text'], return_tensors='pt')
+            tokenized_text = tokenizer(data['text'], return_tensors='pt', max_length=512, truncation=True)
             outputs = model(**tokenized_text.to(device))
 
             attentions = outputs.attentions
@@ -279,8 +327,13 @@ def rank_short_documents(args, dataset, model, tokenizer):
 
                     if args.plm == "BERT":
                         global_attention_scores[-1] = 0
+                    if args.plm == "mBERT":
+                        global_attention_scores[-1] = 0
                     elif args.plm == "GPT2":
                         global_attention_scores[0] = 0
+                    elif args.plm == "RoBERTa" or args.plm == "XLM-R":
+                        global_attention_scores[0] = 0   # Zero out attention for the <s> token at the beginning
+                        global_attention_scores[-1] = 0  # Zero out attention for the </s> token at the end
 
                     redistributed_attention_map = redistribute_global_attention_score(attention_map,
                                                                                       global_attention_scores)
@@ -337,7 +390,13 @@ def rank_long_documents(args, dataset, model, tokenizer):
     if args.plm == 'BERT':
         prefix = '##'
         max_len = 512
+    elif args.plm == 'mBERT':
+        prefix = '##'
+        max_len = 512
     elif args.plm == 'GPT2':
+        prefix = 'Ġ'
+        max_len = 1024
+    elif args.plm == "RoBERTa":
         prefix = 'Ġ'
         max_len = 1024
 
@@ -370,14 +429,17 @@ def rank_long_documents(args, dataset, model, tokenizer):
                 window = windows[i]
                 attention_mask = attention_masks[i]
 
-                if args.plm == 'BERT':
+                if args.plm == 'BERT' or args.plm == 'mBERT':
                     window = [101] + window + [102]
                     attention_mask = [1] + attention_mask + [1]
 
+                # Truncate the input sequences to fit within max_len
+                window = window[:max_len]
+                attention_mask = attention_mask[:max_len]
+
                 window = torch.tensor([window])
                 attention_mask = torch.tensor([attention_mask])
-                # print(window.shape)
-
+                
                 outputs = model(window.to(device), attention_mask=attention_mask.to(device))
                 attentions = outputs.attentions
 
@@ -401,8 +463,13 @@ def rank_long_documents(args, dataset, model, tokenizer):
 
                         if args.plm == "BERT":
                             global_attention_scores[-1] = 0
+                        elif args.plm == "mBERT":
+                            global_attention_scores[-1] = 0
                         elif args.plm == "GPT2":
                             global_attention_scores[0] = 0
+                        elif args.plm in ["RoBERTa", "XLM-R"]:
+                            global_attention_scores[0] = 0   # Zero out attention for the <s> token at the beginning
+                            global_attention_scores[-1] = 0  # Zero out attention for the </s> token at the end
 
                         redistributed_attention_map = redistribute_global_attention_score(attention_map,
                                                                                           global_attention_scores)
@@ -462,17 +529,16 @@ def rank_long_documents(args, dataset, model, tokenizer):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset",
-                        default='Inspec',
+                        default='lnspec',
                         type=str,
                         required=True,
-                        help="Inspec or SemEval2010 or SemEval2017")
+                        help="Dataset name with language combinations")
 
     parser.add_argument("--plm",
                         default='BERT',
                         type=str,
                         required=True,
                         help="BERT or GPT2")
-
     parser.add_argument("--mode",
                         default='Both',
                         type=str,
@@ -481,31 +547,62 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    if args.dataset == 'Inspec' or args.dataset == 'inpsec':
-        data_path = 'data/Inspec.jsonl'
-        doc_type = 'short'
-    elif args.dataset == 'SemEval2010' or args.dataset == 'semeval2010':
-        data_path = 'data/SemEval2010.jsonl'
-        doc_type = 'long'
-    elif args.dataset == 'SemEval2017' or args.dataset == 'semeval2017':
-        data_path = 'data/SemEval2017.jsonl'
-        doc_type = 'short'
-    elif args.dataset == 'Krapivin' or args.dataset == 'krapivin':
-        data_path = 'data/krapivin.jsonl'
-        doc_type = 'long'
-    else:
+    language_combinations = {
+        'En_Es_Inspec': ('English', 'Spanish'),
+        'En_Fr_Inspec': ('English', 'French'),
+        'En_It_Inspec': ('English', 'Italian'),
+        'English_Inspec': ('English',),
+        'Spanish_Inspec': ('Spanish',),
+        'French_Inspec': ('French',),
+        'Italian_Inspec': ('Italian',),
+        'En_Es_SemEval2010': ('English', 'Spanish'),
+        'En_Fr_SemEval2010': ('English', 'French'),
+        'En_It_SemEval2010': ('English', 'Italian'),
+        'En_Es_SemEval2017': ('English', 'Spanish'),
+        'En_Fr_SemEval2017': ('English', 'French'),
+        'En_It_SemEval2017': ('English', 'Italian'),
+        'English_SemEval2010': ('English',),
+        'Spanish_SemEval2010': ('Spanish',),
+        'French_SemEval2010': ('French',),
+        'Italian_SemEval2010': ('Italian',),
+        'English_SemEval2017': ('English',),
+        'Spanish_SemEval2017': ('Spanish',),
+        'French_SemEval2017': ('French',),
+        'Italian_SemEval2017': ('Italian',),
+        'Modified_English_SemEval2010' : ('English',)
+        # Add more language combinations as needed
+    }
+
+    if args.dataset not in language_combinations:
         print('Invalid dataset')
         sys.exit(1)
 
+    languages = language_combinations[args.dataset]
+
+    data_path = f'data/{args.dataset}.jsonl'
     dataset = read_jsonl(data_path)
 
     if args.plm == 'BERT':
         tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
         model = BertModel.from_pretrained("bert-base-uncased", output_attentions=True, add_pooling_layer=False)
-
     elif args.plm == 'GPT2':
         tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
         model = GPT2Model.from_pretrained('gpt2', output_hidden_states=True, output_attentions=True)
+    elif args.plm == 'RoBERTa':
+        tokenizer = RobertaTokenizer.from_pretrained('roberta-base')
+        model = RobertaModel.from_pretrained('roberta-base', output_attentions=True)
+    elif args.plm == 'mBERT':
+        tokenizer = AutoTokenizer.from_pretrained("bert-base-multilingual-cased")
+        model = BertModel.from_pretrained("bert-base-multilingual-cased", output_attentions=True, add_pooling_layer=False)
+    elif args.plm == 'XLM-R':
+        tokenizer = AutoTokenizer.from_pretrained('xlm-roberta-base')
+        model = AutoModel.from_pretrained('xlm-roberta-base', output_attentions=True)
+
+
+    # if 'English_Inspec' in args.dataset or 'English_SemEval2017' in args.dataset:
+    doc_type = 'short'
+    # else:
+    #     doc_type = 'long'
 
     if doc_type == 'short':
         rank_short_documents(args, dataset, model, tokenizer)
