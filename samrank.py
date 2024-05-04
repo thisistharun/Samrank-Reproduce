@@ -569,7 +569,12 @@ if __name__ == '__main__':
         'Spanish_SemEval2017': ('Spanish',),
         'French_SemEval2017': ('French',),
         'Italian_SemEval2017': ('Italian',),
-        'Modified_English_SemEval2010' : ('English',)
+        'Modified_English_SemEval2010' : ('English',),
+        'Modified_English_Inspec' : ('English',),
+        'Modified_English_SemEval2017' : ('English',),
+        'Synonyms_Modified_English_Inspec' : ('English',),
+        'Synonyms_Modified_English_SemEval2010' : ('English',),
+        'Synonyms_Modified_English_SemEval2017' : ('English',)
         # Add more language combinations as needed
     }
 
