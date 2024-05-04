@@ -19,16 +19,18 @@ To reproduce the paper "[SAMRank: Unsupervised Keyphrase Extraction using Self-A
 
 ## Running the Code.
 - For running in Both Global and Propotional Modes
-- Select any one of the dataset from [Inspec/SemEval2010/SemEval2017] and one model from [BERT/GPT2] to get the results in both modes
+- Select any one of the dataset from data folder and one model from [BERT/GPT2/mBERT/RoBERTa] to get the results in both modes.
 - Repeat for other datasets to evaluate the model
+- Follow the below mentioned example format to execute the code
 ```shell
-python samrank.py --dataset [Inspec/SemEval2010/SemEval2017] --plm [BERT/GPT2]
+python samrank.py --dataset English_Inspec --plm BERT
 ```
 - For running in Individual Modes
-- Select any one of the dataset from [Inspec/SemEval2010/SemEval2017] and one model from [BERT/GPT2] along with any of the mode [Global/Propotional]
+- Select any one of the dataset from data folder and one model from [BERT/GPT2/mBert/RoBERTa] along with any of the mode [Global/Propotional]
 - Repeat for other datasets to evaluate the model
+- Follow the below mentioned example format to execute the code
 ```shell
-python samrank.py --dataset [Inspec/SemEval2010/SemEval2017] --plm [BERT/GPT2] --mode [Global/Propotional]
+python samrank.py --dataset English_Inspec --plm GPT2 --mode Global
 
 ```
 ## Results
