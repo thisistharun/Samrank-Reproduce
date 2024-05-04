@@ -5,11 +5,16 @@ To reproduce the paper "[SAMRank: Unsupervised Keyphrase Extraction using Self-A
 ## Requirements
 - [stanford-corenlp-full-2018-02-27](https://drive.google.com/file/d/1K4Ll54ypTf_tF83Mkkar2QKOcZ4Uskl5/view?usp=sharing). Download the zip file and extract it
 - Open the folder standford-corenlp-full-2018-02-27 in your IDE and run the following command
-  ```shell
+  ```
+  cd standford-corenlp-full-2018-02-27
+  ```
+
+  ```
   java -mx4g -cp "*" edu.stanford.nlp.pipeline.StanfordCoreNLPServer -preload tokenize,ssplit,pos -status_port 9000 -port 9000 -timeout 15000
-  
+
+
 - Download the dependencies using the following command
-  ```shell
+  ```
   pip install -r requirements.txt
 
 ## Running the Code.
