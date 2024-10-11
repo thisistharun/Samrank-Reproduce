@@ -1,7 +1,7 @@
 # SamRank Reproduce
 "[SAMRank: Unsupervised Keyphrase Extraction using Self-Attention Map in BERT and GPT-2](https://aclanthology.org/2023.emnlp-main.630)" 
 
-### To Reproduce our Results
+### To Reproduce our Results 
 
 
 ## Requirements
