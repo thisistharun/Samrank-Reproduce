@@ -6,7 +6,7 @@
 
 ## Requirements
 - [stanford-corenlp-full-2018-02-27](https://drive.google.com/file/d/1K4Ll54ypTf_tF83Mkkar2QKOcZ4Uskl5/view?usp=sharing). Download the zip file and extract it
-- Open the folder standford-corenlp-full-2018-02-27 in your IDE and run the following command
+- Open the folder standford-corenlp-full-2018-02-27 in your IDE and run the following command.
   ```
   cd standford-corenlp-full-2018-02-27
   ```
