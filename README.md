@@ -23,7 +23,7 @@
 - For running in Both Global and Propotional Modes
 - Select any one of the dataset from data folder and one model from [BERT/GPT2/mBERT/RoBERTa] to get the results in both modes.
 - Repeat for other datasets to evaluate the model
-- Follow the below mentioned example format to execute the code
+- Follow the below mentioned example format to execute the code 
 ```shell
 python samrank.py --dataset English_Inspec --plm BERT
 ```
